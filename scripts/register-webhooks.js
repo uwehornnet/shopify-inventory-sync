@@ -1,11 +1,11 @@
 /**
  * Registriert den orders/paid Webhook bei Shopify.
- *
+ * 
  * Ausführen: node scripts/register-webhooks.js
- *
+ * 
  * Vorher .env.local laden, z.B. mit dotenv:
  *   node -r dotenv/config scripts/register-webhooks.js
- *
+ * 
  * Oder manuell die ENV-Variablen setzen.
  */
 
@@ -17,17 +17,17 @@ const APP_URL = process.env.APP_URL;
 const GRAPHQL_URL = `https://${SHOPIFY_STORE_DOMAIN}/admin/api/${SHOPIFY_API_VERSION}/graphql.json`;
 
 async function graphql(query, variables) {
-	const res = await fetch(GRAPHQL_URL, {
+  const res = await fetch(GRAPHQL_URL, {
 		method: "POST",
 		headers: {
 			"Content-Type": "application/json",
 			"X-Shopify-Access-Token": SHOPIFY_ACCESS_TOKEN,
 		},
 		body: JSON.stringify({ query, variables }),
-	});
-	const json = await res.json();
-	if (json.errors) throw new Error(JSON.stringify(json.errors));
-	return json.data;
+  });
+  const json = await res.json();
+  if (json.errors) throw new Error(JSON.stringify(json.errors));
+  return json.data;
 }
 
 async function main() {
@@ -79,34 +79,41 @@ async function main() {
 		}
 	}
 
-	// orders/paid Webhook registrieren
-	const callbackUrl = `${APP_URL}/api/webhooks/orders-paid`;
-	console.log(`\nRegistering: ORDERS_PAID → ${callbackUrl}`);
+	// Webhooks registrieren
+	const webhooks = [
+		{ topic: "ORDERS_CREATE", path: "/api/webhooks/orders-create" },
+		{ topic: "ORDERS_PAID", path: "/api/webhooks/orders-paid" },
+	];
 
-	const result = await graphql(
-		`
-			mutation create($topic: WebhookSubscriptionTopic!, $sub: WebhookSubscriptionInput!) {
-				webhookSubscriptionCreate(topic: $topic, webhookSubscription: $sub) {
-					webhookSubscription {
-						id
-					}
-					userErrors {
-						field
-						message
+	for (const webhook of webhooks) {
+		const callbackUrl = `${APP_URL}${webhook.path}`;
+		console.log(`\nRegistering: ${webhook.topic} → ${callbackUrl}`);
+
+		const result = await graphql(
+			`
+				mutation create($topic: WebhookSubscriptionTopic!, $sub: WebhookSubscriptionInput!) {
+					webhookSubscriptionCreate(topic: $topic, webhookSubscription: $sub) {
+						webhookSubscription {
+							id
+						}
+						userErrors {
+							field
+							message
+						}
 					}
 				}
-			}
-		`,
-		{
-			topic: "ORDERS_PAID",
-			sub: { callbackUrl, format: "JSON" },
-		},
-	);
+			`,
+			{
+				topic: webhook.topic,
+				sub: { callbackUrl, format: "JSON" },
+			},
+		);
 
-	if (result.webhookSubscriptionCreate.userErrors.length > 0) {
-		console.error("Error:", result.webhookSubscriptionCreate.userErrors);
-	} else {
-		console.log(`✅ Created: ${result.webhookSubscriptionCreate.webhookSubscription?.id}`);
+		if (result.webhookSubscriptionCreate.userErrors.length > 0) {
+			console.error(`❌ Error:`, result.webhookSubscriptionCreate.userErrors);
+		} else {
+			console.log(`✅ Created: ${result.webhookSubscriptionCreate.webhookSubscription?.id}`);
+		}
 	}
 }
 

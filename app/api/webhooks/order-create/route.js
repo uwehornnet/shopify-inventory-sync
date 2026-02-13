@@ -8,11 +8,11 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 /**
- * orders/paid Webhook
- * 
- * Safety Net: Falls der orders/create Sync fehlgeschlagen ist oder
- * sich der Bestand zwischen create und paid nochmal geändert hat,
- * gleichen wir hier nochmals ab.
+ * orders/create Webhook
+ *
+ * Primärer Trigger: Shopify reduziert "available" sofort bei Order-Erstellung
+ * (Bestand wird als "committed/reserved" markiert).
+ * Wir synchronisieren hier alle Geschwister-Varianten.
  */
 export async function POST(request) {
 	const startTime = Date.now();
@@ -23,14 +23,14 @@ export async function POST(request) {
 
 		const secret = process.env.SHOPIFY_WEBHOOK_SECRET;
 		if (secret && !verifyShopifyWebhook(rawBody, hmac, secret)) {
-			console.error("[Webhook orders/paid] Invalid HMAC signature");
+			console.error("[Webhook orders/create] Invalid HMAC signature");
 			return NextResponse.json({ error: "Invalid signature" }, { status: 401 });
 		}
 
 		const order = JSON.parse(rawBody);
 		const orderName = order.name || `#${order.id}`;
 
-		console.log(`[Webhook orders/paid] Order ${orderName} with ${order.line_items?.length || 0} line items`);
+		console.log(`[Webhook orders/create] Order ${orderName} with ${order.line_items?.length || 0} line items`);
 
 		const results = await processOrderLineItems(order);
 
@@ -39,21 +39,21 @@ export async function POST(request) {
 		const totalUpdated = results.reduce((sum, r) => sum + r.siblingsUpdated, 0);
 
 		console.log(
-			`[Webhook orders/paid] Order ${orderName} done in ${duration}ms: ` +
+			`[Webhook orders/create] Order ${orderName} done in ${duration}ms: ` +
 				`${results.length} groups, ${totalUpdated} variants updated` +
 				(hasErrors ? " (with errors)" : ""),
 		);
 
 		return NextResponse.json({
 			status: hasErrors ? "partial" : "ok",
-			trigger: "orders/paid",
+			trigger: "orders/create",
 			order: orderName,
 			duration: `${duration}ms`,
 			results,
 		});
 	} catch (error) {
 		const duration = Date.now() - startTime;
-		console.error(`[Webhook orders/paid] Error after ${duration}ms:`, error);
+		console.error(`[Webhook orders/create] Error after ${duration}ms:`, error);
 		return NextResponse.json({ error: "Internal server error" }, { status: 500 });
 	}
 }
