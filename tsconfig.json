@@ -30,7 +30,9 @@
 		".next/dev/types/**/*.ts",
 		"**/*.mts",
 		"app/layout.jsx",
-		"app/page.jsx"
+		"app/page.jsx",
+		"app/api/webhooks/test-sync/route.js",
+		"app/api/webhooks/orders-paid/route.js"
 	],
 	"exclude": ["node_modules"]
 }
