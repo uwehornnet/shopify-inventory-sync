@@ -83,6 +83,8 @@ async function main() {
 	const webhooks = [
 		{ topic: "ORDERS_CREATE", path: "/api/webhooks/orders-create" },
 		{ topic: "ORDERS_PAID", path: "/api/webhooks/orders-paid" },
+		{ topic: "ORDERS_CANCELLED", path: "/api/webhooks/orders-cancelled" },
+		{ topic: "REFUNDS_CREATE", path: "/api/webhooks/refunds-create" },
 	];
 
 	for (const webhook of webhooks) {
