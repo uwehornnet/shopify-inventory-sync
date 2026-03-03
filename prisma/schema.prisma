@@ -1,0 +1,65 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+// Note that some adapters may set a maximum length for the String type by default, please ensure your strings are long
+// enough when changing adapters.
+// See https://www.prisma.io/docs/orm/reference/prisma-schema-reference#string for more information
+datasource db {
+  provider = "sqlite"
+  url      = "file:dev.sqlite"
+}
+
+model Session {
+  id            String    @id
+  shop          String
+  state         String
+  isOnline      Boolean   @default(false)
+  scope         String?
+  expires       DateTime?
+  accessToken   String
+  userId        BigInt?
+  firstName     String?
+  lastName      String?
+  email         String?
+  accountOwner  Boolean   @default(false)
+  locale        String?
+  collaborator  Boolean?  @default(false)
+  emailVerified Boolean?  @default(false)
+  refreshToken        String?
+  refreshTokenExpires DateTime?
+}
+
+model SyncLog {
+  id                 String   @id @default(uuid())
+  createdAt          DateTime @default(now())
+
+  // Trigger-Info
+  trigger            String   // "webhook:orders/create" | "webhook:orders/paid" | "manual"
+  orderId            String?  // Shopify Order ID (falls Webhook)
+  orderNumber        String?  // Shopify Order Number (falls Webhook)
+
+  // SKU-Info
+  groupSku           String   // z.B. "BXAAA"
+  sourceVariantSku   String   // z.B. "BXAAA-1"
+  inventoryItemId    String   // gid://shopify/InventoryItem/...
+
+  // Sync-Ergebnis
+  success            Boolean
+  quantity           Int?     // Bestand nach Sync
+  siblingsFound      Int      @default(0)
+  siblingsUpdated    Int      @default(0)
+
+  // Fehler (JSON Array als String)
+  errors             String?  // JSON-serialisierte Array von Error-Messages
+
+  // Performance
+  durationMs         Int?     // Dauer des Syncs in Millisekunden
+
+  @@index([createdAt])
+  @@index([groupSku])
+  @@index([success])
+}
