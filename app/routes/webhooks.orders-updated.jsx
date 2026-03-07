@@ -1,5 +1,5 @@
 import { authenticate } from "../shopify.server";
-import { syncInventoryForVariantWithLogging } from "~/lib/sync-engine-with-logging";
+import { syncInventoryBySkuWithLogging } from "~/lib/sync-engine-with-logging";
 import { extractGroupSku } from "~/lib/sku";
 
 /**
@@ -12,11 +12,14 @@ import { extractGroupSku } from "~/lib/sku";
  * Shopify kennt kein eigenständiges "orders/cancelled" Webhook-Topic.
  * Stornierungen werden als Order-Update geliefert.
  *
+ * Wichtig: Wir nutzen syncInventoryBySkuWithLogging (SKU-Lookup via GraphQL),
+ * da inventory_item_id im Webhook-Payload in manchen Fällen fehlt.
+ *
  * Flow bei Stornierung:
  * 1. Shopify setzt cancelled_at auf der Bestellung
  * 2. Shopify erhöht ggf. Lagerbestand (wenn "Artikel wieder einlagern" gewählt)
  * 3. Shopify feuert orders/updated
- * 4. Wir prüfen cancelled_at → starten Sync für alle Gruppen-Varianten
+ * 4. Wir prüfen cancelled_at → 2s warten → Sync starten
  */
 export async function action({ request }) {
 	const { admin, payload: order } = await authenticate.webhook(request);
@@ -34,7 +37,7 @@ export async function action({ request }) {
 	// Kurz warten, damit Shopify die Bestandsrückbuchung verarbeiten kann
 	await new Promise((resolve) => setTimeout(resolve, 2000));
 
-	// Line Items extrahieren & nach Gruppen-SKU deduplizieren
+	// Line Items extrahieren & nach Gruppen-SKU deduplizieren (erste SKU pro Gruppe)
 	const uniqueGroups = new Map();
 
 	for (const item of order.line_items || []) {
@@ -52,18 +55,8 @@ export async function action({ request }) {
 			continue;
 		}
 
-		if (!item.inventory_item_id) {
-			console.warn(`[Webhook] SKU "${sku}" has no inventory_item_id (inventory tracking disabled?), skipping`);
-			continue;
-		}
-
 		if (!uniqueGroups.has(groupSku)) {
-			const inventoryItemId = `gid://shopify/InventoryItem/${item.inventory_item_id}`;
-			console.log(`[Webhook] Group ${groupSku}: SKU=${sku}, inventoryItemId=${inventoryItemId}`);
-			uniqueGroups.set(groupSku, {
-				sku: sku,
-				inventoryItemId,
-			});
+			uniqueGroups.set(groupSku, sku);
 		}
 	}
 
@@ -71,11 +64,11 @@ export async function action({ request }) {
 
 	const results = [];
 
-	for (const [groupSku, { sku, inventoryItemId }] of uniqueGroups) {
+	for (const [groupSku, sku] of uniqueGroups) {
 		try {
-			console.log(`[Webhook] Syncing group ${groupSku} (from ${sku})`);
+			console.log(`[Webhook] Syncing group ${groupSku} (triggered by SKU ${sku})`);
 
-			const result = await syncInventoryForVariantWithLogging(admin, sku, inventoryItemId, {
+			const result = await syncInventoryBySkuWithLogging(admin, sku, {
 				trigger: "webhook:orders/cancelled",
 				orderId: order.id ? String(order.id) : null,
 				orderNumber: order.order_number ? String(order.order_number) : null,
