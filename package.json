@@ -1,5 +1,5 @@
 {
-  "name": "schaltauge-app",
+  "name": "shopify-inventory-sync",
   "private": true,
   "scripts": {
     "build": "react-router build",
