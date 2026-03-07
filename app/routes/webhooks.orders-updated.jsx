@@ -3,23 +3,32 @@ import { syncInventoryForVariantWithLogging } from "~/lib/sync-engine-with-loggi
 import { extractGroupSku } from "~/lib/sku";
 
 /**
- * Webhook Handler: orders/cancelled
+ * Webhook Handler: orders/updated
  *
- * Wird gefeuert, wenn eine Bestellung storniert wird.
- * Synchronisiert den Bestand aller Geschwister-Varianten nachdem Shopify
- * den Bestand (bei "Artikel wieder einlagern") automatisch erhöht hat.
+ * Feuert bei jeder Aktualisierung einer Bestellung — inkl. Stornierungen.
+ * Wir reagieren NUR wenn die Bestellung storniert wurde (cancelled_at gesetzt).
  *
- * Wichtig: 2 Sekunden Wartezeit, damit Shopify die Rückbuchung
- * abschließen kann bevor wir den aktuellen Bestand lesen.
+ * Warum orders/updated statt orders/cancelled?
+ * Shopify kennt kein eigenständiges "orders/cancelled" Webhook-Topic.
+ * Stornierungen werden als Order-Update geliefert.
+ *
+ * Flow bei Stornierung:
+ * 1. Shopify setzt cancelled_at auf der Bestellung
+ * 2. Shopify erhöht ggf. Lagerbestand (wenn "Artikel wieder einlagern" gewählt)
+ * 3. Shopify feuert orders/updated
+ * 4. Wir prüfen cancelled_at → starten Sync für alle Gruppen-Varianten
  */
 export async function action({ request }) {
-	console.log("[Webhook] orders/cancelled received");
-
 	const { admin, payload: order } = await authenticate.webhook(request);
 
+	// Nur bei Stornierungen reagieren
+	if (!order.cancelled_at) {
+		return Response.json({ skipped: true, reason: "not cancelled" }, { status: 200 });
+	}
+
 	console.log(
-		`[Webhook] Order #${order.order_number || order.id} cancelled` +
-			(order.cancel_reason ? ` (Grund: ${order.cancel_reason})` : "")
+		`[Webhook] orders/updated (storniert): Order #${order.order_number || order.id}` +
+			(order.cancel_reason ? ` — Grund: ${order.cancel_reason}` : "")
 	);
 
 	// Kurz warten, damit Shopify die Bestandsrückbuchung verarbeiten kann
@@ -91,7 +100,7 @@ export async function action({ request }) {
 	}
 
 	const successCount = results.filter((r) => r.success).length;
-	console.log(`[Webhook] orders/cancelled completed: ${successCount}/${results.length} syncs successful`);
+	console.log(`[Webhook] orders/updated (storniert) completed: ${successCount}/${results.length} syncs successful`);
 
 	return Response.json(
 		{
