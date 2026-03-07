@@ -1,4 +1,4 @@
-import { json } from "react-router";
+import { authenticate } from "../shopify.server";
 import { syncInventoryForVariant } from "~/lib/sync-engine";
 
 /**
@@ -7,7 +7,7 @@ import { syncInventoryForVariant } from "~/lib/sync-engine";
  * Erlaubt manuelles Triggern eines Syncs für Debugging und Testing.
  *
  * Aufruf:
- *   GET /api/test-sync?sku=BXAAA-1&inventoryItemId=gid://shopify/InventoryItem/123456789
+ *   GET /app/api/test-sync?sku=BXAAA-1&inventoryItemId=gid://shopify/InventoryItem/123456789
  *
  * Response:
  *   {
@@ -23,13 +23,14 @@ import { syncInventoryForVariant } from "~/lib/sync-engine";
  *   }
  */
 export async function loader({ request }) {
+	const { admin } = await authenticate.admin(request);
+
 	const url = new URL(request.url);
 	const sku = url.searchParams.get("sku");
 	const inventoryItemId = url.searchParams.get("inventoryItemId");
 
-	// Parameter-Validierung
 	if (!sku || !inventoryItemId) {
-		return json(
+		return Response.json(
 			{
 				error: "Missing required parameters",
 				usage: {
@@ -47,9 +48,8 @@ export async function loader({ request }) {
 
 	console.log(`[Test-Sync] Manual sync requested for SKU: ${sku}`);
 
-	// Sync ausführen
 	try {
-		const result = await syncInventoryForVariant(sku, inventoryItemId);
+		const result = await syncInventoryForVariant(admin, sku, inventoryItemId);
 
 		const success = result.errors.length === 0;
 
@@ -61,7 +61,7 @@ export async function loader({ request }) {
 			console.warn(`[Test-Sync] Errors encountered:`, result.errors);
 		}
 
-		return json(
+		return Response.json(
 			{
 				success,
 				result: {
@@ -78,7 +78,7 @@ export async function loader({ request }) {
 	} catch (error) {
 		console.error(`[Test-Sync] ✗ Sync failed:`, error);
 
-		return json(
+		return Response.json(
 			{
 				success: false,
 				error: error.message || String(error),

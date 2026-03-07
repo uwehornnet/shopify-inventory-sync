@@ -1,6 +1,9 @@
-import { shopifyGraphQL, delay } from "./shopify";
 import { extractGroupSku } from "./sku";
-import { db } from "~/db.server";
+import db from "~/db.server";
+
+function delay(ms) {
+	return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 // ============================================================================
 // GraphQL Queries
@@ -72,21 +75,20 @@ const SET_INVENTORY_MUTATION = `
 // Sync Logic
 // ============================================================================
 
-/**
- * Findet alle Varianten mit derselben Gruppen-SKU.
- */
-async function findSiblingVariants(groupSku) {
+async function findSiblingVariants(admin, groupSku) {
 	const allVariants = [];
 	let hasNext = true;
 	let cursor = null;
 
 	while (hasNext) {
-		const data = await shopifyGraphQL(SEARCH_VARIANTS_BY_SKU_QUERY, {
-			query: `sku:${groupSku}-*`,
-			first: 100,
-			after: cursor,
+		const response = await admin.graphql(SEARCH_VARIANTS_BY_SKU_QUERY, {
+			variables: {
+				query: `sku:${groupSku}-*`,
+				first: 100,
+				after: cursor,
+			},
 		});
-
+		const { data } = await response.json();
 		const { pageInfo, edges } = data.productVariants;
 
 		for (const { node } of edges) {
@@ -105,11 +107,11 @@ async function findSiblingVariants(groupSku) {
 	return allVariants;
 }
 
-/**
- * Liest den aktuellen "available" Bestand einer Variante.
- */
-async function getInventoryLevel(inventoryItemId) {
-	const data = await shopifyGraphQL(GET_INVENTORY_LEVEL_QUERY, { inventoryItemId });
+async function getInventoryLevel(admin, inventoryItemId) {
+	const response = await admin.graphql(GET_INVENTORY_LEVEL_QUERY, {
+		variables: { inventoryItemId },
+	});
+	const { data } = await response.json();
 
 	const level = data.inventoryItem?.inventoryLevels?.edges?.[0]?.node;
 	if (!level) return null;
@@ -123,23 +125,17 @@ async function getInventoryLevel(inventoryItemId) {
 	};
 }
 
-/**
- * Setzt den Bestand einer Variante auf einen bestimmten Wert.
- */
-async function setInventoryLevel(inventoryItemId, locationId, quantity) {
-	const data = await shopifyGraphQL(SET_INVENTORY_MUTATION, {
-		input: {
-			reason: "correction",
-			name: "available",
-			quantities: [
-				{
-					inventoryItemId,
-					locationId,
-					quantity,
-				},
-			],
+async function setInventoryLevel(admin, inventoryItemId, locationId, quantity) {
+	const response = await admin.graphql(SET_INVENTORY_MUTATION, {
+		variables: {
+			input: {
+				reason: "correction",
+				name: "available",
+				quantities: [{ inventoryItemId, locationId, quantity }],
+			},
 		},
 	});
+	const { data } = await response.json();
 
 	const { userErrors } = data.inventorySetQuantities;
 	if (userErrors.length > 0) {
@@ -149,23 +145,9 @@ async function setInventoryLevel(inventoryItemId, locationId, quantity) {
 	return { success: true };
 }
 
-/**
- * Hauptfunktion: Synchronisiert alle Varianten einer Gruppen-SKU MIT DATENBANK-LOGGING.
- *
- * @param {string} variantSku - SKU der Variante (z.B. "BXAAA-1")
- * @param {string} inventoryItemId - Shopify Inventory Item ID
- * @param {Object} options - Optionale Metadaten
- * @param {string} options.trigger - Trigger-Typ ("webhook:orders/create", "manual", etc.)
- * @param {string} options.orderId - Shopify Order ID (falls Webhook)
- * @param {string} options.orderNumber - Shopify Order Number (falls Webhook)
- *
- * @returns {Promise<Object>} Sync-Ergebnis mit Log-ID
- */
-export async function syncInventoryForVariantWithLogging(variantSku, inventoryItemId, options = {}) {
+export async function syncInventoryForVariantWithLogging(admin, variantSku, inventoryItemId, options = {}) {
 	const startTime = Date.now();
 	const groupSku = extractGroupSku(variantSku);
-
-	// Metadaten aus options extrahieren
 	const { trigger = "manual", orderId = null, orderNumber = null } = options;
 
 	if (!groupSku) {
@@ -186,7 +168,6 @@ export async function syncInventoryForVariantWithLogging(variantSku, inventoryIt
 			durationMs: Date.now() - startTime,
 		};
 
-		// In DB speichern
 		await db.syncLog.create({ data: logData });
 
 		return {
@@ -202,8 +183,7 @@ export async function syncInventoryForVariantWithLogging(variantSku, inventoryIt
 
 	console.log(`[Sync] Starting sync for group ${groupSku} (triggered by ${variantSku})`);
 
-	// 1. Aktuellen Bestand der bestellten Variante lesen
-	const inventoryLevel = await getInventoryLevel(inventoryItemId);
+	const inventoryLevel = await getInventoryLevel(admin, inventoryItemId);
 
 	if (!inventoryLevel) {
 		const logData = {
@@ -239,11 +219,9 @@ export async function syncInventoryForVariantWithLogging(variantSku, inventoryIt
 	const { quantity, locationId } = inventoryLevel;
 	console.log(`[Sync] ${groupSku}: current quantity = ${quantity} at ${locationId}`);
 
-	// 2. Alle Geschwister finden
-	const siblings = await findSiblingVariants(groupSku);
+	const siblings = await findSiblingVariants(admin, groupSku);
 	console.log(`[Sync] ${groupSku}: found ${siblings.length} siblings`);
 
-	// 3. Alle Geschwister (außer die Quell-Variante) auf denselben Bestand setzen
 	const errors = [];
 	let updated = 0;
 
@@ -251,7 +229,7 @@ export async function syncInventoryForVariantWithLogging(variantSku, inventoryIt
 		if (sibling.inventoryItem.id === inventoryItemId) continue;
 
 		try {
-			const result = await setInventoryLevel(sibling.inventoryItem.id, locationId, quantity);
+			const result = await setInventoryLevel(admin, sibling.inventoryItem.id, locationId, quantity);
 
 			if (result.success) {
 				updated++;
@@ -274,7 +252,6 @@ export async function syncInventoryForVariantWithLogging(variantSku, inventoryIt
 			` (${durationMs}ms)`
 	);
 
-	// 4. Log in DB speichern
 	const logData = {
 		id: crypto.randomUUID(),
 		createdAt: new Date(),

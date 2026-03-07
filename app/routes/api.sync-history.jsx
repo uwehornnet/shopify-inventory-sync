@@ -1,5 +1,4 @@
-import { json } from "react-router";
-import { db } from "~/db.server";
+import db from "~/db.server";
 
 /**
  * API-Route: Sync-History abrufen
@@ -47,7 +46,7 @@ export async function loader({ request }) {
 				gte: new Date(since),
 			};
 		} catch (error) {
-			return json(
+			return Response.json(
 				{
 					error: "Invalid 'since' date format. Use ISO 8601 (e.g., 2026-02-01T00:00:00Z)",
 				},
@@ -87,7 +86,7 @@ export async function loader({ request }) {
 					: 0,
 		};
 
-		return json({
+		return Response.json({
 			success: true,
 			logs: formattedLogs,
 			stats,
@@ -100,7 +99,7 @@ export async function loader({ request }) {
 	} catch (error) {
 		console.error("[API] sync-history error:", error);
 
-		return json(
+		return Response.json(
 			{
 				success: false,
 				error: error.message || "Failed to fetch sync history",

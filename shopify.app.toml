@@ -1,15 +1,15 @@
 # Learn more about configuring your app at https://shopify.dev/docs/apps/tools/cli/configuration
 
 client_id = "5028be27f13660e3c51f68a8463dee58"
-name = "schaltauge-app"
-application_url = "https://example.com"
+name = "Schaltauge Inventory Sync"
+application_url = "https://schaltauge-shopifyapp.vercel.app"
 embedded = true
 
 [build]
 automatically_update_urls_on_dev = true
 
 [webhooks]
-api_version = "2026-04"
+api_version = "2025-10"
 
   [[webhooks.subscriptions]]
   topics = [ "app/uninstalled" ]
@@ -33,4 +33,7 @@ api_version = "2026-04"
 scopes = "write_products,read_inventory,write_inventory,read_orders"
 
 [auth]
-redirect_urls = [ "https://example.com/api/auth" ]
+redirect_urls = [
+  "https://schaltauge-shopifyapp.vercel.app/auth/callback",
+  "https://schaltauge-shopifyapp.vercel.app/auth"
+]
