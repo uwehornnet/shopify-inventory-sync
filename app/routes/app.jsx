@@ -5,7 +5,6 @@ import { authenticate } from "../shopify.server";
 
 export const loader = async ({ request }) => {
   await authenticate.admin(request);
-
   // eslint-disable-next-line no-undef
   return { apiKey: process.env.SHOPIFY_API_KEY || "" };
 };
@@ -17,18 +16,17 @@ export default function App() {
     <AppProvider embedded apiKey={apiKey}>
       <s-app-nav>
         <s-link href="/app">Dashboard</s-link>
-        <s-link href="/app/history">Sync-History</s-link>
+        <s-link href="/app/auto">Auto-Sync</s-link>
+        <s-link href="/app/bulk">Bestand setzen</s-link>
+        <s-link href="/app/manual">Manueller Sync</s-link>
       </s-app-nav>
       <Outlet />
     </AppProvider>
   );
 }
 
-// Shopify needs React Router to catch some thrown responses, so that their headers are included in the response.
 export function ErrorBoundary() {
   return boundary.error(useRouteError());
 }
 
-export const headers = (headersArgs) => {
-  return boundary.headers(headersArgs);
-};
+export const headers = (headersArgs) => boundary.headers(headersArgs);

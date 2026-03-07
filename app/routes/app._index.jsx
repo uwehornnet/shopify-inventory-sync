@@ -1,382 +1,164 @@
-import { useState, useRef } from "react";
-import { useLoaderData, useFetcher } from "react-router";
+import { useLoaderData } from "react-router";
 import { authenticate } from "../shopify.server";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import db from "~/db.server";
+import { formatDate, formatTrigger, TH, TD, IdLink, StatusBadge, TableWrap } from "~/lib/ui-helpers";
+
+// ── Loader ──────────────────────────────────────────────────────
+
+const AUTO_WHERE   = { trigger: { startsWith: "webhook:" } };
+const BULK_WHERE   = { trigger: "manual:bulk-set" };
+const MANUAL_WHERE = { trigger: { in: ["manual", "manual:test"] } };
+
+async function catStats(where) {
+  const [total, success, last] = await Promise.all([
+    db.syncLog.count({ where }),
+    db.syncLog.count({ where: { ...where, success: true } }),
+    db.syncLog.findFirst({ where, orderBy: { createdAt: "desc" }, select: { createdAt: true } }),
+  ]);
+  return { total, success, failures: total - success, lastRun: last?.createdAt ?? null };
+}
 
 export const loader = async ({ request }) => {
   await authenticate.admin(request);
 
-  const [recentLogs, totalCount, successCount] = await Promise.all([
-    db.syncLog.findMany({
-      orderBy: { createdAt: "desc" },
-      take: 10,
-    }),
-    db.syncLog.count(),
-    db.syncLog.count({ where: { success: true } }),
+  const [autoStats, bulkStats, manualStats, recentLogs] = await Promise.all([
+    catStats(AUTO_WHERE),
+    catStats(BULK_WHERE),
+    catStats(MANUAL_WHERE),
+    db.syncLog.findMany({ orderBy: { createdAt: "desc" }, take: 10 }),
   ]);
 
   return Response.json({
+    autoStats,
+    bulkStats,
+    manualStats,
     recentLogs: recentLogs.map((log) => ({
       ...log,
       errors: log.errors ? JSON.parse(log.errors) : [],
     })),
-    stats: {
-      totalCount,
-      successCount,
-      failureCount: totalCount - successCount,
-      successRate: totalCount > 0 ? Math.round((successCount / totalCount) * 100) : 0,
-      lastSync: recentLogs[0]?.createdAt ?? null,
-    },
   });
 };
 
-export const action = async ({ request }) => {
-  const { admin } = await authenticate.admin(request);
-  const formData = await request.formData();
-  const type = formData.get("_type");
+// ── Komponenten ─────────────────────────────────────────────────
 
-  // ── Bestand setzen (Bulk Set) ───────────────────────────────
-  if (type === "setAll") {
-    const groupSku  = formData.get("groupSku")?.toString().trim().toUpperCase();
-    const quantityRaw = formData.get("quantity")?.toString().trim();
-    const quantity  = parseInt(quantityRaw);
+function Tile({ title, href, stats }) {
+  const rate = stats.total > 0 ? Math.round((stats.success / stats.total) * 100) : null;
+  const rateColor = rate === null ? "#8c9196" : rate >= 90 ? "#008060" : rate >= 70 ? "#b98900" : "#d82c0d";
 
-    if (!groupSku) {
-      return Response.json({ setAllError: "Bitte eine Gruppen-SKU eingeben." }, { status: 400 });
-    }
-    if (isNaN(quantity) || quantity < 0) {
-      return Response.json({ setAllError: "Bitte eine gültige Menge (≥ 0) eingeben." }, { status: 400 });
-    }
-
-    const { setInventoryForGroupWithLogging } = await import("~/lib/sync-engine-with-logging");
-    const result = await setInventoryForGroupWithLogging(admin, groupSku, quantity);
-    return Response.json({ setAllResult: result });
-  }
-
-  // ── Manueller Sync ─────────────────────────────────────────
-  const sku = formData.get("sku")?.toString().trim();
-
-  if (!sku) {
-    return Response.json({ syncError: "Bitte eine Varianten-SKU eingeben." }, { status: 400 });
-  }
-
-  const { syncInventoryBySkuWithLogging } = await import("~/lib/sync-engine-with-logging");
-  const result = await syncInventoryBySkuWithLogging(admin, sku, { trigger: "manual" });
-  return Response.json({ syncResult: result });
-};
-
-// ── Helpers ────────────────────────────────────────────────────
-
-function formatDate(dateStr) {
-  if (!dateStr) return "—";
-  const d = new Date(dateStr);
   return (
-    d.toLocaleDateString("de-DE", { day: "2-digit", month: "2-digit", year: "numeric" }) +
-    " " +
-    d.toLocaleTimeString("de-DE", { hour: "2-digit", minute: "2-digit" })
+    <div
+      style={{
+        border: "1px solid #e1e3e5",
+        borderRadius: "8px",
+        padding: "20px",
+        background: "#fff",
+        display: "flex",
+        flexDirection: "column",
+        gap: "14px",
+      }}
+    >
+      <div style={{ fontWeight: 700, fontSize: "15px", color: "#202223" }}>{title}</div>
+
+      <div style={{ fontSize: "13px", color: "#6d7175" }}>
+        Letzter Sync:{" "}
+        <span style={{ color: "#202223", fontWeight: 500 }}>
+          {stats.lastRun ? formatDate(stats.lastRun) : "Noch kein Eintrag"}
+        </span>
+      </div>
+
+      <div style={{ display: "flex", gap: "20px" }}>
+        <div>
+          <div style={{ fontSize: "26px", fontWeight: 700, color: "#202223", lineHeight: 1 }}>{stats.total}</div>
+          <div style={{ fontSize: "12px", color: "#6d7175", marginTop: "2px" }}>Gesamt</div>
+        </div>
+        <div>
+          <div style={{ fontSize: "26px", fontWeight: 700, color: "#008060", lineHeight: 1 }}>{stats.success}</div>
+          <div style={{ fontSize: "12px", color: "#6d7175", marginTop: "2px" }}>Erfolgreich</div>
+        </div>
+        {stats.failures > 0 && (
+          <div>
+            <div style={{ fontSize: "26px", fontWeight: 700, color: "#d82c0d", lineHeight: 1 }}>{stats.failures}</div>
+            <div style={{ fontSize: "12px", color: "#6d7175", marginTop: "2px" }}>Fehler</div>
+          </div>
+        )}
+        {rate !== null && (
+          <div>
+            <div style={{ fontSize: "26px", fontWeight: 700, color: rateColor, lineHeight: 1 }}>{rate}%</div>
+            <div style={{ fontSize: "12px", color: "#6d7175", marginTop: "2px" }}>Rate</div>
+          </div>
+        )}
+      </div>
+
+      <a href={href} style={{ color: "#2c6ecb", fontSize: "13px", textDecoration: "none", fontWeight: 500 }}>
+        Details anzeigen →
+      </a>
+    </div>
   );
 }
 
-function formatDuration(ms) {
-  if (!ms) return "—";
-  if (ms < 1000) return `${ms}ms`;
-  return `${(ms / 1000).toFixed(1)}s`;
-}
+// ── Seite ────────────────────────────────────────────────────────
 
-function formatTrigger(trigger) {
-  return trigger.replace("webhook:orders/", "Order ").replace("webhook:", "");
-}
-
-const inputStyle = {
-  width: "100%",
-  padding: "8px 12px",
-  border: "1px solid #c9cccf",
-  borderRadius: "6px",
-  fontSize: "14px",
-  boxSizing: "border-box",
-  fontFamily: "inherit",
-};
-
-const labelStyle = {
-  display: "block",
-  marginBottom: "4px",
-  fontSize: "14px",
-  fontWeight: 500,
-  color: "#202223",
-};
-
-// ── Component ──────────────────────────────────────────────────
-
-export default function Index() {
-  const { recentLogs, stats } = useLoaderData();
-
-  // Fetcher: Manueller Sync
-  const syncFetcher   = useFetcher();
-  const skuRef        = useRef();
-  const [syncFormError, setSyncFormError] = useState(null);
-
-  // Fetcher: Bestand setzen
-  const setAllFetcher  = useFetcher();
-  const groupSkuRef    = useRef();
-  const quantityRef    = useRef();
-  const [setAllFormError, setSetAllFormError] = useState(null);
-
-  const isSyncing  = syncFetcher.state !== "idle";
-  const isSettingAll = setAllFetcher.state !== "idle";
-
-  const handleSync = () => {
-    const sku = skuRef.current?.value?.trim();
-    if (!sku) { setSyncFormError("Bitte eine Varianten-SKU eingeben."); return; }
-    setSyncFormError(null);
-    syncFetcher.submit({ _type: "sync", sku }, { method: "POST" });
-  };
-
-  const handleSetAll = () => {
-    const groupSku = groupSkuRef.current?.value?.trim();
-    const quantity = quantityRef.current?.value?.trim();
-    if (!groupSku || quantity === "") { setSetAllFormError("Bitte beide Felder ausfüllen."); return; }
-    if (isNaN(parseInt(quantity)) || parseInt(quantity) < 0) {
-      setSetAllFormError("Menge muss eine Zahl ≥ 0 sein.");
-      return;
-    }
-    setSetAllFormError(null);
-    setAllFetcher.submit({ _type: "setAll", groupSku, quantity }, { method: "POST" });
-  };
+export default function Dashboard() {
+  const { autoStats, bulkStats, manualStats, recentLogs } = useLoaderData();
 
   return (
     <s-page heading="Inventory Sync">
+      <s-section>
 
-      {/* ── Stats ─────────────────────────────────────────────── */}
-      <s-section heading="Übersicht">
-        <s-stack direction="inline" gap="base">
-          <s-box padding="base" borderWidth="base" borderRadius="base">
-            <s-stack direction="block" gap="tight">
-              <s-text>Gesamt Syncs</s-text>
-              <s-heading>{stats.totalCount}</s-heading>
-            </s-stack>
-          </s-box>
-          <s-box padding="base" borderWidth="base" borderRadius="base">
-            <s-stack direction="block" gap="tight">
-              <s-text>Erfolgreich</s-text>
-              <s-heading><span style={{ color: "#008060" }}>{stats.successCount}</span></s-heading>
-            </s-stack>
-          </s-box>
-          <s-box padding="base" borderWidth="base" borderRadius="base">
-            <s-stack direction="block" gap="tight">
-              <s-text>Fehler</s-text>
-              <s-heading>
-                <span style={{ color: stats.failureCount > 0 ? "#d82c0d" : "#202223" }}>{stats.failureCount}</span>
-              </s-heading>
-            </s-stack>
-          </s-box>
-          <s-box padding="base" borderWidth="base" borderRadius="base">
-            <s-stack direction="block" gap="tight">
-              <s-text>Erfolgsrate</s-text>
-              <s-heading>
-                <span style={{ color: stats.successRate >= 90 ? "#008060" : stats.successRate >= 70 ? "#b98900" : "#d82c0d" }}>
-                  {stats.successRate}%
-                </span>
-              </s-heading>
-            </s-stack>
-          </s-box>
-          <s-box padding="base" borderWidth="base" borderRadius="base">
-            <s-stack direction="block" gap="tight">
-              <s-text>Letzter Sync</s-text>
-              <s-paragraph><span style={{ fontSize: "13px" }}>{formatDate(stats.lastSync)}</span></s-paragraph>
-            </s-stack>
-          </s-box>
-        </s-stack>
-      </s-section>
+        {/* Kacheln */}
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: "repeat(3, 1fr)",
+            gap: "16px",
+            marginBottom: "36px",
+          }}
+        >
+          <Tile title="Auto-Sync" href="/app/auto" stats={autoStats} />
+          <Tile title="Bestand setzen" href="/app/bulk" stats={bulkStats} />
+          <Tile title="Manueller Sync" href="/app/manual" stats={manualStats} />
+        </div>
 
-      {/* ── Recent Logs ───────────────────────────────────────── */}
-      <s-section heading="Letzte Aktivitäten">
+        {/* Letzte Aktivitäten */}
+        <div style={{ fontWeight: 600, fontSize: "15px", marginBottom: "12px", color: "#202223" }}>
+          Letzte Aktivitäten
+        </div>
+
         {recentLogs.length === 0 ? (
-          <s-paragraph>Noch keine Sync-Aktivitäten vorhanden. Syncs werden automatisch bei neuen Bestellungen ausgelöst.</s-paragraph>
+          <p style={{ color: "#6d7175", fontSize: "14px" }}>
+            Noch keine Sync-Aktivitäten vorhanden. Syncs werden automatisch bei neuen Bestellungen ausgelöst.
+          </p>
         ) : (
-          <s-box borderWidth="base" borderRadius="base" padding="none">
-            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "14px" }}>
-              <thead>
-                <tr style={{ background: "#f6f6f7", borderBottom: "1px solid #e1e3e5" }}>
-                  <th style={{ padding: "10px 16px", textAlign: "left",   color: "#6d7175", fontWeight: 600 }}>Datum</th>
-                  <th style={{ padding: "10px 16px", textAlign: "left",   color: "#6d7175", fontWeight: 600 }}>Gruppen-SKU</th>
-                  <th style={{ padding: "10px 16px", textAlign: "left",   color: "#6d7175", fontWeight: 600 }}>Trigger</th>
-                  <th style={{ padding: "10px 16px", textAlign: "right",  color: "#6d7175", fontWeight: 600 }}>Menge</th>
-                  <th style={{ padding: "10px 16px", textAlign: "right",  color: "#6d7175", fontWeight: 600 }}>Varianten</th>
-                  <th style={{ padding: "10px 16px", textAlign: "right",  color: "#6d7175", fontWeight: 600 }}>Dauer</th>
-                  <th style={{ padding: "10px 16px", textAlign: "center", color: "#6d7175", fontWeight: 600 }}>Status</th>
+          <TableWrap>
+            <thead>
+              <tr>
+                <th style={TH}>ID</th>
+                <th style={TH}>Datum</th>
+                <th style={TH}>Gruppen-SKU</th>
+                <th style={TH}>Typ</th>
+                <th style={{ ...TH, textAlign: "right" }}>Menge</th>
+                <th style={{ ...TH, textAlign: "right" }}>Varianten</th>
+                <th style={{ ...TH, textAlign: "center" }}>Status</th>
+              </tr>
+            </thead>
+            <tbody>
+              {recentLogs.map((log) => (
+                <tr key={log.id}>
+                  <td style={TD}><IdLink id={log.id} /></td>
+                  <td style={{ ...TD, color: "#6d7175", whiteSpace: "nowrap" }}>{formatDate(log.createdAt)}</td>
+                  <td style={{ ...TD, fontWeight: 600 }}>{log.groupSku}</td>
+                  <td style={{ ...TD, color: "#6d7175" }}>{formatTrigger(log.trigger, log.orderNumber)}</td>
+                  <td style={{ ...TD, textAlign: "right" }}>{log.quantity ?? "—"}</td>
+                  <td style={{ ...TD, textAlign: "right" }}>{log.siblingsUpdated}/{log.siblingsFound}</td>
+                  <td style={{ ...TD, textAlign: "center" }}><StatusBadge success={log.success} /></td>
                 </tr>
-              </thead>
-              <tbody>
-                {recentLogs.map((log, i) => (
-                  <tr key={log.id} style={{
-                    borderBottom: i < recentLogs.length - 1 ? "1px solid #f1f2f3" : "none",
-                    background: log.success ? "transparent" : "#fff4f4",
-                  }}>
-                    <td style={{ padding: "10px 16px", color: "#6d7175", whiteSpace: "nowrap" }}>{formatDate(log.createdAt)}</td>
-                    <td style={{ padding: "10px 16px", fontWeight: 600 }}>{log.groupSku}</td>
-                    <td style={{ padding: "10px 16px", color: "#6d7175" }}>{formatTrigger(log.trigger)}</td>
-                    <td style={{ padding: "10px 16px", textAlign: "right" }}>{log.quantity ?? "—"}</td>
-                    <td style={{ padding: "10px 16px", textAlign: "right" }}>{log.siblingsUpdated}/{log.siblingsFound}</td>
-                    <td style={{ padding: "10px 16px", textAlign: "right", color: "#6d7175" }}>{formatDuration(log.durationMs)}</td>
-                    <td style={{ padding: "10px 16px" }}>
-                      {log.success ? (
-                        <span style={{ color: "#008060", fontWeight: 600 }}>✓ OK</span>
-                      ) : (
-                        <div>
-                          <span style={{ color: "#d82c0d", fontWeight: 600 }}>✗ Fehler</span>
-                          {log.errors?.length > 0 && (
-                            <div style={{ fontSize: "11px", color: "#d82c0d", marginTop: "3px" }}>
-                              {log.errors[0].length > 80
-                                ? log.errors[0].substring(0, 80) + "…"
-                                : log.errors[0]}
-                              {log.errors.length > 1 && (
-                                <span style={{ color: "#8c9196" }}> +{log.errors.length - 1} weitere</span>
-                              )}
-                            </div>
-                          )}
-                        </div>
-                      )}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </s-box>
+              ))}
+            </tbody>
+          </TableWrap>
         )}
-        {recentLogs.length > 0 && (
-          <div style={{ marginTop: "12px" }}>
-            <s-link href="/app/history">Alle Sync-Logs anzeigen →</s-link>
-          </div>
-        )}
+
       </s-section>
-
-      {/* ── Sidebar: Bestand setzen ───────────────────────────── */}
-      <s-section slot="aside" heading="Bestand setzen">
-        <s-stack direction="block" gap="base">
-          <s-paragraph>
-            Setzt <strong>alle Varianten</strong> einer Gruppen-SKU auf eine feste Menge — ideal zum Initialisieren des Bestands vor Shop-Start.
-          </s-paragraph>
-
-          <div>
-            <label style={labelStyle}>Gruppen-SKU</label>
-            <input
-              ref={groupSkuRef}
-              type="text"
-              placeholder="z.B. BXAAA"
-              style={inputStyle}
-            />
-            <p style={{ margin: "4px 0 0", fontSize: "12px", color: "#6d7175" }}>
-              Nur der Gruppen-Teil — ohne Suffix (z.B. ohne „-1")
-            </p>
-          </div>
-
-          <div>
-            <label style={labelStyle}>Ziel-Menge</label>
-            <input
-              ref={quantityRef}
-              type="number"
-              min="0"
-              placeholder="z.B. 50"
-              style={inputStyle}
-            />
-          </div>
-
-          {setAllFormError && (
-            <p style={{ color: "#d82c0d", fontSize: "13px", margin: 0 }}>{setAllFormError}</p>
-          )}
-          {setAllFetcher.data?.setAllError && (
-            <p style={{ color: "#d82c0d", fontSize: "13px", margin: 0 }}>{setAllFetcher.data.setAllError}</p>
-          )}
-
-          <s-button onClick={handleSetAll} {...(isSettingAll ? { loading: true } : {})}>
-            {isSettingAll ? "Wird gesetzt…" : "Bestand setzen"}
-          </s-button>
-
-          {setAllFetcher.data?.setAllResult && !isSettingAll && (() => {
-            const r = setAllFetcher.data.setAllResult;
-            const ok = r.errors?.length === 0;
-            return (
-              <s-box padding="base" borderWidth="base" borderRadius="base" background="subdued">
-                <s-stack direction="block" gap="tight">
-                  <s-paragraph>
-                    <span style={{ color: ok ? "#008060" : "#d82c0d", fontWeight: 600 }}>
-                      {ok ? "✓ Erfolgreich" : "⚠ Teilweise Fehler"}
-                    </span>
-                  </s-paragraph>
-                  <s-paragraph>
-                    Gruppe: <strong>{r.groupSku}</strong>
-                  </s-paragraph>
-                  <s-paragraph>
-                    <strong>{r.variantsUpdated}</strong> von <strong>{r.variantsFound}</strong> Varianten auf Menge <strong>{r.quantity}</strong> gesetzt
-                  </s-paragraph>
-                  {r.errors?.length > 0 && (
-                    <s-paragraph>
-                      <span style={{ color: "#d82c0d", fontSize: "13px" }}>
-                        Fehler: {r.errors.join(", ")}
-                      </span>
-                    </s-paragraph>
-                  )}
-                </s-stack>
-              </s-box>
-            );
-          })()}
-        </s-stack>
-      </s-section>
-
-      {/* ── Sidebar: Manueller Sync ───────────────────────────── */}
-      <s-section slot="aside" heading="Manueller Test-Sync">
-        <s-stack direction="block" gap="base">
-          <s-paragraph>
-            Liest den Bestand einer Variante aus und synchronisiert alle Geschwister auf denselben Wert.
-          </s-paragraph>
-
-          <div>
-            <label style={labelStyle}>Varianten-SKU</label>
-            <input ref={skuRef} type="text" placeholder="z.B. BXAAA-1" style={inputStyle} />
-            <p style={{ margin: "4px 0 0", fontSize: "12px", color: "#6d7175" }}>
-              Mit Suffix — z.B. „BXAAA-1" für eine bestimmte Variante
-            </p>
-          </div>
-
-          {syncFormError && (
-            <p style={{ color: "#d82c0d", fontSize: "13px", margin: 0 }}>{syncFormError}</p>
-          )}
-          {syncFetcher.data?.syncError && (
-            <p style={{ color: "#d82c0d", fontSize: "13px", margin: 0 }}>{syncFetcher.data.syncError}</p>
-          )}
-
-          <s-button onClick={handleSync} {...(isSyncing ? { loading: true } : {})}>
-            {isSyncing ? "Sync läuft…" : "Sync ausführen"}
-          </s-button>
-
-          {syncFetcher.data?.syncResult && !isSyncing && (() => {
-            const r = syncFetcher.data.syncResult;
-            const ok = r.errors?.length === 0;
-            return (
-              <s-box padding="base" borderWidth="base" borderRadius="base" background="subdued">
-                <s-stack direction="block" gap="tight">
-                  <s-paragraph>
-                    <span style={{ color: ok ? "#008060" : "#d82c0d", fontWeight: 600 }}>
-                      {ok ? "✓ Erfolgreich" : "✗ Fehler"}
-                    </span>
-                  </s-paragraph>
-                  <s-paragraph>Gruppe: <strong>{r.groupSku}</strong></s-paragraph>
-                  <s-paragraph>
-                    {r.siblingsUpdated}/{r.siblingsFound} Varianten auf Menge <strong>{r.quantity}</strong> gesetzt
-                  </s-paragraph>
-                  {r.errors?.length > 0 && (
-                    <s-paragraph>
-                      <span style={{ color: "#d82c0d", fontSize: "13px" }}>{r.errors.join(", ")}</span>
-                    </s-paragraph>
-                  )}
-                </s-stack>
-              </s-box>
-            );
-          })()}
-        </s-stack>
-      </s-section>
-
     </s-page>
   );
 }
