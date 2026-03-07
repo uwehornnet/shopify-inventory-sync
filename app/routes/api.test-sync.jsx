@@ -1,26 +1,13 @@
 import { authenticate } from "../shopify.server";
-import { syncInventoryForVariant } from "~/lib/sync-engine";
+import { syncInventoryForVariantWithLogging } from "~/lib/sync-engine-with-logging";
 
 /**
- * Test-Endpoint: Manueller Inventory Sync
+ * Test-Endpoint: Manueller Inventory Sync (mit DB-Logging)
  *
  * Erlaubt manuelles Triggern eines Syncs für Debugging und Testing.
  *
  * Aufruf:
- *   GET /app/api/test-sync?sku=BXAAA-1&inventoryItemId=gid://shopify/InventoryItem/123456789
- *
- * Response:
- *   {
- *     success: true,
- *     result: {
- *       groupSku: "BXAAA",
- *       sourceVariantSku: "BXAAA-1",
- *       quantity: 47,
- *       siblingsFound: 3,
- *       siblingsUpdated: 2,
- *       errors: []
- *     }
- *   }
+ *   GET /api/test-sync?sku=BXAAA-1&inventoryItemId=gid://shopify/InventoryItem/123456789
  */
 export async function loader({ request }) {
 	const { admin } = await authenticate.admin(request);
@@ -34,7 +21,6 @@ export async function loader({ request }) {
 			{
 				error: "Missing required parameters",
 				usage: {
-					url: "/api/test-sync",
 					params: {
 						sku: "Variant SKU (e.g., BXAAA-1)",
 						inventoryItemId: "Shopify Inventory Item ID (e.g., gid://shopify/InventoryItem/123456789)",
@@ -49,21 +35,20 @@ export async function loader({ request }) {
 	console.log(`[Test-Sync] Manual sync requested for SKU: ${sku}`);
 
 	try {
-		const result = await syncInventoryForVariant(admin, sku, inventoryItemId);
+		const result = await syncInventoryForVariantWithLogging(admin, sku, inventoryItemId, {
+			trigger: "manual:test",
+		});
 
 		const success = result.errors.length === 0;
 
 		console.log(
-			`[Test-Sync] ${success ? "✓" : "✗"} ${result.groupSku}: ${result.siblingsUpdated}/${result.siblingsFound} variants synced to qty ${result.quantity}`
+			`[Test-Sync] ${success ? "✓" : "✗"} ${result.groupSku}: ${result.siblingsUpdated}/${result.siblingsFound} variants synced to qty ${result.quantity} (log: ${result.logId})`
 		);
-
-		if (result.errors.length > 0) {
-			console.warn(`[Test-Sync] Errors encountered:`, result.errors);
-		}
 
 		return Response.json(
 			{
 				success,
+				logId: result.logId,
 				result: {
 					groupSku: result.groupSku,
 					sourceVariantSku: result.sourceVariantSku,

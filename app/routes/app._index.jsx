@@ -49,8 +49,8 @@ export const action = async ({ request }) => {
       return Response.json({ setAllError: "Bitte eine gültige Menge (≥ 0) eingeben." }, { status: 400 });
     }
 
-    const { setInventoryForGroup } = await import("~/lib/sync-engine");
-    const result = await setInventoryForGroup(admin, groupSku, quantity);
+    const { setInventoryForGroupWithLogging } = await import("~/lib/sync-engine-with-logging");
+    const result = await setInventoryForGroupWithLogging(admin, groupSku, quantity);
     return Response.json({ setAllResult: result });
   }
 
@@ -61,8 +61,8 @@ export const action = async ({ request }) => {
     return Response.json({ syncError: "Bitte eine Varianten-SKU eingeben." }, { status: 400 });
   }
 
-  const { syncInventoryBySku } = await import("~/lib/sync-engine");
-  const result = await syncInventoryBySku(admin, sku);
+  const { syncInventoryBySkuWithLogging } = await import("~/lib/sync-engine-with-logging");
+  const result = await syncInventoryBySkuWithLogging(admin, sku, { trigger: "manual" });
   return Response.json({ syncResult: result });
 };
 
@@ -219,10 +219,24 @@ export default function Index() {
                     <td style={{ padding: "10px 16px", textAlign: "right" }}>{log.quantity ?? "—"}</td>
                     <td style={{ padding: "10px 16px", textAlign: "right" }}>{log.siblingsUpdated}/{log.siblingsFound}</td>
                     <td style={{ padding: "10px 16px", textAlign: "right", color: "#6d7175" }}>{formatDuration(log.durationMs)}</td>
-                    <td style={{ padding: "10px 16px", textAlign: "center" }}>
-                      {log.success
-                        ? <span style={{ color: "#008060", fontWeight: 600 }}>✓ OK</span>
-                        : <span style={{ color: "#d82c0d", fontWeight: 600, cursor: "help" }} title={log.errors?.join("\n")}>✗ Fehler</span>}
+                    <td style={{ padding: "10px 16px" }}>
+                      {log.success ? (
+                        <span style={{ color: "#008060", fontWeight: 600 }}>✓ OK</span>
+                      ) : (
+                        <div>
+                          <span style={{ color: "#d82c0d", fontWeight: 600 }}>✗ Fehler</span>
+                          {log.errors?.length > 0 && (
+                            <div style={{ fontSize: "11px", color: "#d82c0d", marginTop: "3px" }}>
+                              {log.errors[0].length > 80
+                                ? log.errors[0].substring(0, 80) + "…"
+                                : log.errors[0]}
+                              {log.errors.length > 1 && (
+                                <span style={{ color: "#8c9196" }}> +{log.errors.length - 1} weitere</span>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      )}
                     </td>
                   </tr>
                 ))}

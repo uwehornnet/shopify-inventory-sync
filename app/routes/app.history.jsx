@@ -295,12 +295,20 @@ export default function History() {
                         {log.success ? (
                           <span style={{ color: "#008060", fontWeight: 600 }}>✓ OK</span>
                         ) : (
-                          <span
-                            style={{ color: "#d82c0d", fontWeight: 600, cursor: "help" }}
-                            title={log.errors?.join("\n") || "Unbekannter Fehler"}
-                          >
-                            ✗ Fehler
-                          </span>
+                          <div>
+                            <span style={{ color: "#d82c0d", fontWeight: 600 }}>✗ Fehler</span>
+                            {log.errors?.length > 0 ? (
+                              <ul style={{ margin: "4px 0 0", padding: "0 0 0 14px", fontSize: "11px", color: "#d82c0d" }}>
+                                {log.errors.map((e, i) => (
+                                  <li key={i} style={{ marginBottom: "2px" }}>{e}</li>
+                                ))}
+                              </ul>
+                            ) : (
+                              <div style={{ fontSize: "11px", color: "#8c9196", marginTop: "2px" }}>
+                                Keine Details verfügbar
+                              </div>
+                            )}
+                          </div>
                         )}
                       </td>
                     </tr>

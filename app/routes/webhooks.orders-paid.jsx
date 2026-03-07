@@ -40,10 +40,17 @@ export async function action({ request }) {
 			continue;
 		}
 
+		if (!item.inventory_item_id) {
+			console.warn(`[Webhook] SKU "${sku}" has no inventory_item_id (inventory tracking disabled?), skipping`);
+			continue;
+		}
+
 		if (!uniqueGroups.has(groupSku)) {
+			const inventoryItemId = `gid://shopify/InventoryItem/${item.inventory_item_id}`;
+			console.log(`[Webhook] Group ${groupSku}: SKU=${sku}, inventoryItemId=${inventoryItemId}`);
 			uniqueGroups.set(groupSku, {
 				sku: sku,
-				inventoryItemId: `gid://shopify/InventoryItem/${item.inventory_item_id}`,
+				inventoryItemId,
 			});
 		}
 	}
@@ -69,8 +76,10 @@ export async function action({ request }) {
 				...result,
 			});
 
+			const syncOk = result.errors.length === 0;
 			console.log(
-				`[Webhook] ✓ ${groupSku}: ${result.siblingsUpdated}/${result.siblingsFound} variants synced to qty ${result.quantity} (log: ${result.logId})`
+				`[Webhook] ${syncOk ? "✓" : "✗"} ${groupSku}: ${result.siblingsUpdated}/${result.siblingsFound} variants synced to qty ${result.quantity} (log: ${result.logId})` +
+					(result.errors.length > 0 ? ` | errors: ${result.errors.join("; ")}` : "")
 			);
 		} catch (error) {
 			console.error(`[Webhook] ✗ ${groupSku} sync failed:`, error);

@@ -1,6 +1,22 @@
 import { extractGroupSku } from "./sku";
 import db from "~/db.server";
 
+const FIND_VARIANT_BY_SKU_QUERY = `
+  query findVariantBySku($query: String!) {
+    productVariants(first: 5, query: $query) {
+      edges {
+        node {
+          id
+          sku
+          inventoryItem {
+            id
+          }
+        }
+      }
+    }
+  }
+`;
+
 function delay(ms) {
 	return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -36,6 +52,7 @@ const SEARCH_VARIANTS_BY_SKU_QUERY = `
 const GET_INVENTORY_LEVEL_QUERY = `
   query getInventoryLevel($inventoryItemId: ID!) {
     inventoryItem(id: $inventoryItemId) {
+      tracked
       inventoryLevels(first: 5) {
         edges {
           node {
@@ -113,11 +130,15 @@ async function getInventoryLevel(admin, inventoryItemId) {
 	});
 	const { data } = await response.json();
 
-	const level = data.inventoryItem?.inventoryLevels?.edges?.[0]?.node;
-	if (!level) return null;
+	const item = data.inventoryItem;
+	if (!item) return { error: `InventoryItem nicht gefunden (ID: ${inventoryItemId})` };
+	if (!item.tracked) return { error: "Bestandsverfolgung für dieses Produkt deaktiviert" };
+
+	const level = item.inventoryLevels?.edges?.[0]?.node;
+	if (!level) return { error: "Kein Lagerort für dieses Produkt zugewiesen" };
 
 	const available = level.quantities.find((q) => q.name === "available");
-	if (available === undefined) return null;
+	if (available === undefined) return { error: "Verfügbare Menge nicht auslesbar" };
 
 	return {
 		quantity: available.quantity,
@@ -186,7 +207,9 @@ export async function syncInventoryForVariantWithLogging(admin, variantSku, inve
 
 	const inventoryLevel = await getInventoryLevel(admin, inventoryItemId);
 
-	if (!inventoryLevel) {
+	if (!inventoryLevel || inventoryLevel.error) {
+		const errorMsg = inventoryLevel?.error ?? `Could not read inventory for ${variantSku}`;
+		console.error(`[Sync] ${groupSku}: ${errorMsg}`);
 		const logData = {
 			id: crypto.randomUUID(),
 			createdAt: new Date(),
@@ -200,7 +223,7 @@ export async function syncInventoryForVariantWithLogging(admin, variantSku, inve
 			quantity: null,
 			siblingsFound: 0,
 			siblingsUpdated: 0,
-			errors: JSON.stringify([`Could not read inventory for ${variantSku}`]),
+			errors: JSON.stringify([errorMsg]),
 			durationMs: Date.now() - startTime,
 		};
 
@@ -213,7 +236,7 @@ export async function syncInventoryForVariantWithLogging(admin, variantSku, inve
 			quantity: 0,
 			siblingsFound: 0,
 			siblingsUpdated: 0,
-			errors: [`Could not read inventory for ${variantSku}`],
+			errors: [errorMsg],
 		};
 	}
 
@@ -279,6 +302,165 @@ export async function syncInventoryForVariantWithLogging(admin, variantSku, inve
 		quantity,
 		siblingsFound: siblings.length,
 		siblingsUpdated: updated,
+		errors,
+	};
+}
+
+// ============================================================================
+// Manueller Sync per SKU (ohne inventoryItemId)
+// ============================================================================
+
+async function lookupInventoryItemId(admin, variantSku) {
+	const response = await admin.graphql(FIND_VARIANT_BY_SKU_QUERY, {
+		variables: { query: `sku:${variantSku}` },
+	});
+	const { data } = await response.json();
+	const edges = data.productVariants?.edges ?? [];
+	const exact = edges.find(({ node }) => node.sku === variantSku);
+	const node = exact?.node ?? edges[0]?.node;
+	return node?.inventoryItem?.id ?? null;
+}
+
+/**
+ * Wie syncInventoryForVariantWithLogging, ermittelt inventoryItemId jedoch
+ * automatisch per SKU-Lookup — kein manuelles Nachschlagen nötig.
+ */
+export async function syncInventoryBySkuWithLogging(admin, variantSku, options = {}) {
+	const startTime = Date.now();
+	const groupSku = extractGroupSku(variantSku) ?? "UNKNOWN";
+	const { trigger = "manual", orderId = null, orderNumber = null } = options;
+
+	const inventoryItemId = await lookupInventoryItemId(admin, variantSku);
+
+	if (!inventoryItemId) {
+		const logData = {
+			id: crypto.randomUUID(),
+			createdAt: new Date(),
+			trigger,
+			orderId,
+			orderNumber,
+			groupSku,
+			sourceVariantSku: variantSku,
+			inventoryItemId: "unknown",
+			success: false,
+			quantity: null,
+			siblingsFound: 0,
+			siblingsUpdated: 0,
+			errors: JSON.stringify([`Keine Variante mit SKU "${variantSku}" gefunden.`]),
+			durationMs: Date.now() - startTime,
+		};
+		await db.syncLog.create({ data: logData });
+		return {
+			logId: logData.id,
+			groupSku,
+			sourceVariantSku: variantSku,
+			quantity: 0,
+			siblingsFound: 0,
+			siblingsUpdated: 0,
+			errors: [`Keine Variante mit SKU "${variantSku}" gefunden.`],
+		};
+	}
+
+	return syncInventoryForVariantWithLogging(admin, variantSku, inventoryItemId, options);
+}
+
+// ============================================================================
+// Bulk Set mit Logging
+// ============================================================================
+
+/**
+ * Setzt alle Varianten einer Gruppen-SKU auf eine bestimmte Menge
+ * und schreibt das Ergebnis in die Datenbank.
+ */
+export async function setInventoryForGroupWithLogging(admin, groupSku, quantity, options = {}) {
+	const startTime = Date.now();
+	const { trigger = "manual:bulk-set" } = options;
+
+	const variants = await findSiblingVariants(admin, groupSku);
+
+	if (variants.length === 0) {
+		const logData = {
+			id: crypto.randomUUID(),
+			createdAt: new Date(),
+			trigger,
+			orderId: null,
+			orderNumber: null,
+			groupSku,
+			sourceVariantSku: groupSku,
+			inventoryItemId: "bulk",
+			success: false,
+			quantity,
+			siblingsFound: 0,
+			siblingsUpdated: 0,
+			errors: JSON.stringify([`Keine Varianten für Gruppen-SKU "${groupSku}" gefunden.`]),
+			durationMs: Date.now() - startTime,
+		};
+		await db.syncLog.create({ data: logData });
+		return {
+			logId: logData.id,
+			groupSku,
+			quantity,
+			variantsFound: 0,
+			variantsUpdated: 0,
+			errors: [`Keine Varianten für Gruppen-SKU "${groupSku}" gefunden.`],
+		};
+	}
+
+	const errors = [];
+	let updated = 0;
+
+	for (const variant of variants) {
+		try {
+			const level = await getInventoryLevel(admin, variant.inventoryItem.id);
+			if (!level || level.error) {
+				errors.push(`${variant.sku}: ${level?.error ?? "Kein Lagerort gefunden"}`);
+				continue;
+			}
+			const result = await setInventoryLevel(admin, variant.inventoryItem.id, level.locationId, quantity);
+			if (result.success) {
+				updated++;
+			} else {
+				errors.push(`${variant.sku}: ${result.error}`);
+			}
+			await delay(200);
+		} catch (err) {
+			errors.push(`${variant.sku}: ${err.message || String(err)}`);
+		}
+	}
+
+	const success = errors.length === 0;
+	const durationMs = Date.now() - startTime;
+
+	console.log(
+		`[BulkSet] ${groupSku}: ${updated}/${variants.length} Varianten auf Menge ${quantity} gesetzt` +
+			(errors.length > 0 ? ` (${errors.length} Fehler)` : "") +
+			` (${durationMs}ms)`
+	);
+
+	const logData = {
+		id: crypto.randomUUID(),
+		createdAt: new Date(),
+		trigger,
+		orderId: null,
+		orderNumber: null,
+		groupSku,
+		sourceVariantSku: groupSku,
+		inventoryItemId: "bulk",
+		success,
+		quantity,
+		siblingsFound: variants.length,
+		siblingsUpdated: updated,
+		errors: errors.length > 0 ? JSON.stringify(errors) : null,
+		durationMs,
+	};
+	await db.syncLog.create({ data: logData });
+
+	return {
+		logId: logData.id,
+		groupSku,
+		quantity,
+		variantsFound: variants.length,
+		variantsUpdated: updated,
 		errors,
 	};
 }

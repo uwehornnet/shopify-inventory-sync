@@ -51,6 +51,7 @@ const SEARCH_VARIANTS_BY_SKU_QUERY = `
 const GET_INVENTORY_LEVEL_QUERY = `
   query getInventoryLevel($inventoryItemId: ID!) {
     inventoryItem(id: $inventoryItemId) {
+      tracked
       inventoryLevels(first: 5) {
         edges {
           node {
@@ -67,6 +68,7 @@ const GET_INVENTORY_LEVEL_QUERY = `
     }
   }
 `;
+
 
 const SET_INVENTORY_MUTATION = `
   mutation inventorySetQuantities($input: InventorySetQuantitiesInput!) {
@@ -128,11 +130,15 @@ async function getInventoryLevel(admin, inventoryItemId) {
 	});
 	const { data } = await response.json();
 
-	const level = data.inventoryItem?.inventoryLevels?.edges?.[0]?.node;
-	if (!level) return null;
+	const item = data.inventoryItem;
+	if (!item) return { error: `InventoryItem nicht gefunden (ID: ${inventoryItemId})` };
+	if (!item.tracked) return { error: "Bestandsverfolgung für dieses Produkt deaktiviert" };
+
+	const level = item.inventoryLevels?.edges?.[0]?.node;
+	if (!level) return { error: "Kein Lagerort für dieses Produkt zugewiesen" };
 
 	const available = level.quantities.find((q) => q.name === "available");
-	if (available === undefined) return null;
+	if (available === undefined) return { error: "Verfügbare Menge nicht auslesbar" };
 
 	return {
 		quantity: available.quantity,
@@ -189,8 +195,8 @@ export async function setInventoryForGroup(admin, groupSku, quantity) {
 		try {
 			const level = await getInventoryLevel(admin, variant.inventoryItem.id);
 
-			if (!level) {
-				errors.push(`${variant.sku}: Kein Lagerort gefunden`);
+			if (!level || level.error) {
+				errors.push(`${variant.sku}: ${level?.error ?? "Kein Lagerort gefunden"}`);
 				continue;
 			}
 
@@ -279,14 +285,16 @@ export async function syncInventoryForVariant(admin, variantSku, inventoryItemId
 
 	const inventoryLevel = await getInventoryLevel(admin, inventoryItemId);
 
-	if (!inventoryLevel) {
+	if (!inventoryLevel || inventoryLevel.error) {
+		const errorMsg = inventoryLevel?.error ?? `Could not read inventory for ${variantSku}`;
+		console.error(`[Sync] ${groupSku}: ${errorMsg}`);
 		return {
 			groupSku,
 			sourceVariantSku: variantSku,
 			quantity: 0,
 			siblingsFound: 0,
 			siblingsUpdated: 0,
-			errors: [`Could not read inventory for ${variantSku}`],
+			errors: [errorMsg],
 		};
 	}
 
