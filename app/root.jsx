@@ -7,6 +7,15 @@ import {
   isRouteErrorResponse,
   useRouteError,
 } from "react-router";
+import { addDocumentResponseHeaders } from "./shopify.server";
+
+export const loader = async ({ request }) => {
+  const responseHeaders = new Headers();
+  addDocumentResponseHeaders(request, responseHeaders);
+  return Response.json({}, { headers: responseHeaders });
+};
+
+export const headers = ({ loaderHeaders }) => loaderHeaders;
 
 export function Layout({ children }) {
   return (

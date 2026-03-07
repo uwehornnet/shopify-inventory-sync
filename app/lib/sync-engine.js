@@ -8,6 +8,22 @@ function delay(ms) {
 // GraphQL Queries
 // ============================================================================
 
+const FIND_VARIANT_BY_SKU_QUERY = `
+  query findVariantBySku($query: String!) {
+    productVariants(first: 5, query: $query) {
+      edges {
+        node {
+          id
+          sku
+          inventoryItem {
+            id
+          }
+        }
+      }
+    }
+  }
+`;
+
 const SEARCH_VARIANTS_BY_SKU_QUERY = `
   query searchVariantsBySku($query: String!, $first: Int!, $after: String) {
     productVariants(first: $first, after: $after, query: $query) {
@@ -130,6 +146,7 @@ async function setInventoryLevel(admin, inventoryItemId, locationId, quantity) {
 			input: {
 				reason: "correction",
 				name: "available",
+				ignoreCompareQuantity: true,
 				quantities: [{ inventoryItemId, locationId, quantity }],
 			},
 		},
@@ -142,6 +159,106 @@ async function setInventoryLevel(admin, inventoryItemId, locationId, quantity) {
 	}
 
 	return { success: true };
+}
+
+/**
+ * Setzt alle Varianten einer Gruppen-SKU auf eine bestimmte Menge.
+ * Ideal zum Initialisieren des Bestands bei Shop-Start.
+ *
+ * @param {object} admin - Shopify Admin API Client
+ * @param {string} groupSku - Gruppen-SKU (z.B. "BXAAA")
+ * @param {number} quantity - Ziel-Menge für alle Varianten
+ */
+export async function setInventoryForGroup(admin, groupSku, quantity) {
+	const variants = await findSiblingVariants(admin, groupSku);
+
+	if (variants.length === 0) {
+		return {
+			groupSku,
+			quantity,
+			variantsFound: 0,
+			variantsUpdated: 0,
+			errors: [`Keine Varianten für Gruppen-SKU "${groupSku}" gefunden.`],
+		};
+	}
+
+	const errors = [];
+	let updated = 0;
+
+	for (const variant of variants) {
+		try {
+			const level = await getInventoryLevel(admin, variant.inventoryItem.id);
+
+			if (!level) {
+				errors.push(`${variant.sku}: Kein Lagerort gefunden`);
+				continue;
+			}
+
+			const result = await setInventoryLevel(admin, variant.inventoryItem.id, level.locationId, quantity);
+
+			if (result.success) {
+				updated++;
+			} else {
+				errors.push(`${variant.sku}: ${result.error}`);
+			}
+
+			await delay(200);
+		} catch (err) {
+			errors.push(`${variant.sku}: ${err.message || String(err)}`);
+		}
+	}
+
+	console.log(
+		`[SetAll] ${groupSku}: ${updated}/${variants.length} Varianten auf Menge ${quantity} gesetzt` +
+			(errors.length > 0 ? ` (${errors.length} Fehler)` : "")
+	);
+
+	return {
+		groupSku,
+		quantity,
+		variantsFound: variants.length,
+		variantsUpdated: updated,
+		errors,
+	};
+}
+
+/**
+ * Sucht eine Variante per SKU und gibt die zugehörige inventoryItemId zurück.
+ * Gibt null zurück wenn keine exakte Übereinstimmung gefunden wurde.
+ */
+async function lookupInventoryItemId(admin, variantSku) {
+	const response = await admin.graphql(FIND_VARIANT_BY_SKU_QUERY, {
+		variables: { query: `sku:${variantSku}` },
+	});
+	const { data } = await response.json();
+
+	const edges = data.productVariants?.edges ?? [];
+	// Exakten SKU-Treffer bevorzugen (Shopify kann Partial-Matches zurückgeben)
+	const exact = edges.find(({ node }) => node.sku === variantSku);
+	const node = exact?.node ?? edges[0]?.node;
+
+	return node?.inventoryItem?.id ?? null;
+}
+
+/**
+ * Wie syncInventoryForVariant, aber die inventoryItemId wird automatisch
+ * per SKU-Lookup ermittelt — kein manuelles Nachschlagen nötig.
+ */
+export async function syncInventoryBySku(admin, variantSku) {
+	const inventoryItemId = await lookupInventoryItemId(admin, variantSku);
+
+	if (!inventoryItemId) {
+		return {
+			groupSku: extractGroupSku(variantSku) ?? "UNKNOWN",
+			sourceVariantSku: variantSku,
+			quantity: 0,
+			siblingsFound: 0,
+			siblingsUpdated: 0,
+			errors: [`Keine Variante mit SKU "${variantSku}" gefunden.`],
+		};
+	}
+
+	return syncInventoryForVariant(admin, variantSku, inventoryItemId);
 }
 
 export async function syncInventoryForVariant(admin, variantSku, inventoryItemId) {

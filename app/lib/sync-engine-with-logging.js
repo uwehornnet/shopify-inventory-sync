@@ -131,6 +131,7 @@ async function setInventoryLevel(admin, inventoryItemId, locationId, quantity) {
 			input: {
 				reason: "correction",
 				name: "available",
+				ignoreCompareQuantity: true,
 				quantities: [{ inventoryItemId, locationId, quantity }],
 			},
 		},
