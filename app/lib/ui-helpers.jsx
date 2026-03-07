@@ -1,3 +1,5 @@
+import { Link, Form } from "react-router";
+
 // ── Formatierung ────────────────────────────────────────────────
 
 export function formatDate(dateStr) {
@@ -135,7 +137,7 @@ export function StatBar({ items }) {
 /** Filter-Formular (GET) – für alle Log-Seiten */
 export function LogFilter({ filters, basePath, isLoading }) {
   return (
-    <form method="get" style={{ marginBottom: "16px" }}>
+    <Form method="get" style={{ marginBottom: "16px" }}>
       <input type="hidden" name="page" value="1" />
       <div style={{ display: "flex", gap: "12px", flexWrap: "wrap", alignItems: "flex-end" }}>
         <div>
@@ -166,10 +168,10 @@ export function LogFilter({ filters, basePath, isLoading }) {
         </div>
         <div style={{ display: "flex", gap: "8px" }}>
           <button type="submit" style={BTN_PRIMARY}>{isLoading ? "Lädt…" : "Filtern"}</button>
-          <a href={basePath} style={BTN_SECONDARY}>Zurücksetzen</a>
+          <Link to={basePath} style={BTN_SECONDARY}>Zurücksetzen</Link>
         </div>
       </div>
-    </form>
+    </Form>
   );
 }
 
@@ -183,10 +185,10 @@ export function Pagination({ page, totalPages, total, filters, basePath }) {
       </span>
       <div style={{ display: "flex", gap: "8px" }}>
         {page > 1
-          ? <a href={pageUrl(basePath, filters, page - 1)} style={BTN_SECONDARY}>← Zurück</a>
+          ? <Link to={pageUrl(basePath, filters, page - 1)} style={BTN_SECONDARY}>← Zurück</Link>
           : <span style={btnOff}>← Zurück</span>}
         {page < totalPages
-          ? <a href={pageUrl(basePath, filters, page + 1)} style={BTN_SECONDARY}>Weiter →</a>
+          ? <Link to={pageUrl(basePath, filters, page + 1)} style={BTN_SECONDARY}>Weiter →</Link>
           : <span style={btnOff}>Weiter →</span>}
       </div>
     </div>
@@ -196,12 +198,12 @@ export function Pagination({ page, totalPages, total, filters, basePath }) {
 /** ID-Link zur Detailseite */
 export function IdLink({ id }) {
   return (
-    <a
-      href={`/app/logs/${id}`}
+    <Link
+      to={`/app/logs/${id}`}
       style={{ fontFamily: "monospace", color: "#2c6ecb", fontSize: "12px", textDecoration: "none" }}
     >
       {id.substring(0, 8)}
-    </a>
+    </Link>
   );
 }
 

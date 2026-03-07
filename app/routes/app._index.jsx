@@ -1,4 +1,4 @@
-import { useLoaderData } from "react-router";
+import { useLoaderData, Link } from "react-router";
 import { authenticate } from "../shopify.server";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import db from "~/db.server";
@@ -90,9 +90,9 @@ function Tile({ title, href, stats }) {
         )}
       </div>
 
-      <a href={href} style={{ color: "#2c6ecb", fontSize: "13px", textDecoration: "none", fontWeight: 500 }}>
+      <Link to={href} style={{ color: "#2c6ecb", fontSize: "13px", textDecoration: "none", fontWeight: 500 }}>
         Details anzeigen →
-      </a>
+      </Link>
     </div>
   );
 }

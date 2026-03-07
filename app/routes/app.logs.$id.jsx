@@ -1,5 +1,4 @@
-import { useLoaderData, Form } from "react-router";
-import { redirect } from "react-router";
+import { useLoaderData, Form, Link, redirect } from "react-router";
 import { authenticate } from "../shopify.server";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import db from "~/db.server";
@@ -75,12 +74,12 @@ export default function LogDetail() {
       <s-section>
 
         {/* Zurück */}
-        <a
-          href={backUrl}
+        <Link
+          to={backUrl}
           style={{ ...BTN_SECONDARY, display: "inline-block", marginBottom: "24px" }}
         >
           ← Zurück zur Liste
-        </a>
+        </Link>
 
         {/* Status-Banner */}
         <div style={{
