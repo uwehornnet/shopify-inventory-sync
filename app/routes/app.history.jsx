@@ -78,8 +78,11 @@ function formatDuration(ms) {
 
 function formatTrigger(trigger, orderNumber) {
   if (trigger === "manual") return "Manuell";
-  if (trigger.includes("orders/create")) return orderNumber ? `Order #${orderNumber}` : "Order erstellt";
-  if (trigger.includes("orders/paid"))   return orderNumber ? `Order #${orderNumber} (bezahlt)` : "Order bezahlt";
+  if (trigger === "manual:test") return "Manuell (Test)";
+  if (trigger === "manual:bulk-set") return "Bestand setzen";
+  if (trigger.includes("orders/create"))    return orderNumber ? `Order #${orderNumber}` : "Order erstellt";
+  if (trigger.includes("orders/paid"))      return orderNumber ? `Order #${orderNumber} (bezahlt)` : "Order bezahlt";
+  if (trigger.includes("orders/cancelled")) return orderNumber ? `Order #${orderNumber} (storniert)` : "Order storniert";
   return trigger;
 }
 
